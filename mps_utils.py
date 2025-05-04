@@ -2,6 +2,7 @@ from scipy.special import comb
 import numpy as np 
 from functools import reduce 
 from copy import deepcopy
+from tqdm.notebook import tqdm
 
 def MPS_poly(n,a, reg):
     p = len(a)-1
@@ -147,7 +148,7 @@ def trunc_mps(M,order):
         else:
             cannon[i+1] = np.einsum('ij,mj->mi',np.diag(S) @ V,cannon[i+1])
     
-    cannon[-1] = cannon[-1]/np.sqrt(cannon[-1][0].T @ cannon[-1][0] + cannon[-1][1].T @ cannon[-1][1]) 
+    cannon[-1] = cannon[-1]/np.sqrt(cannon[-1][0].T.conjugate() @ cannon[-1][0] + cannon[-1][1].T.conjugate() @ cannon[-1][1]) 
     
     return cannon 
 
@@ -230,30 +231,23 @@ def apply_double_unitary(U,mps,index):
         out[index] = t1
         out[index+1] = t2
 
-    return right_cannonical_mps(out)
+    return out #right_cannonical_mps(out)
 
 
 
 def entangle_layer__(mps,L):
+    out = [np.array(m,dtype=complex)  for m in deepcopy(mps)]
     out = deepcopy(mps)
     for (U,idx) in zip(L[:-1],range(0,len(L)-1)[::-1]):
         out = apply_double_unitary(U,out,idx)
-    return apply_single_unitary(L[-1],out,0)
+    return right_cannonical_mps(apply_single_unitary(L[-1],out,0))#apply_single_unitary(L[-1],out,0)
 
 def disentangle_layer__(mps,L):
-    out = deepcopy(mps)
-    out = apply_single_unitary(L[-1].T,out,0)
+    out = [np.array(m,dtype=complex)  for m in deepcopy(mps)]
+    out = apply_single_unitary(L[-1].T.conjugate(),out,0)
     for (U,idx) in zip(L[:-1][::-1],range(0,len(L)-1)):
-        out = apply_double_unitary(U.T,out,idx)
-    return out
-
-
-def check_left(mps):
-    assert np.all(np.isclose(mps[0] @ mps[0].T, np.eye(mps[0].shape[0])))
-    for i in range(1,len(mps)-1):
-        assert np.all(np.isclose(np.sum([j.T @ j for j in mps[i]],axis=0),np.eye(mps[i][0].shape[1])))
-        
-    assert (np.isclose(np.sqrt(mps[-1][0].T @ mps[-1][0] + mps[-1][1].T @ mps[-1][1]),1))
+        out = apply_double_unitary(U.T.conjugate(),out,idx)
+    return right_cannonical_mps(out)#out
 
 
 ### Qiskit methods 
@@ -261,29 +255,35 @@ import qiskit
 d2ZYZ = qiskit.synthesis.TwoQubitBasisDecomposer(qiskit.circuit.library.CXGate(), euler_basis="ZYZ")
 d1ZYZ = qiskit.synthesis.OneQubitEulerDecomposer(basis = "ZYZ")
 
+def nearest_unitary(M):
+    U,_,V = np.linalg.svd(M)
+    return U @ V
+
 def circ_from_layer(L):
-    circs = [d2ZYZ(np.reshape(np.permute_dims(np.reshape(U,(2,2,2,2)),(1,0,3,2)),(4,4))) for U in L[:-1]] + [d1ZYZ(L[-1])] 
+    
+
+    circs = [d2ZYZ(np.reshape(np.permute_dims(np.reshape(nearest_unitary(U),(2,2,2,2)),(1,0,3,2)),(4,4))) for U in L[:-1]] + [d1ZYZ(nearest_unitary(L[-1]))] 
     circ = qiskit.QuantumCircuit(len(L))
     
     for (c,idx) in zip(circs[:-1],range(0,len(L)-1)[::-1]):
-        circ.append(c,[idx,idx+1])
-    circ.append(circs[-1],[0])
+        circ = circ.compose(c,[idx,idx+1])
+    circ = circ.compose(circs[-1],[0])
     return circ
 
 def circ_from_layers(L_list):
     circ = circ_from_layer(L_list[0])
     for L in L_list[1:]:
-        circ.append(circ_from_layer(L),range(len(L)))
+        circ = circ.compose(circ_from_layer(L),range(len(L)))
     return circ
 
-def circ_from_mps(mps,L):
+def get_layers(mps,L):
     layers = []
     mps_inter = []
     for i in range(L):
         if(i==0):
             new_layer = get_layer(trunc_mps(mps,2))
             new_mps = disentangle_layer__(mps,new_layer)
-
+    
             layers.append(new_layer)
             mps_inter.append(new_mps)
         else:
@@ -292,4 +292,392 @@ def circ_from_mps(mps,L):
 
             layers.append(new_layer)
             mps_inter.append(new_mps)
-    return circ_from_layers(layers[::-1])
+    return (layers[::-1])
+
+
+def left_mps_contract(mps1,mps2):
+    extra = np.einsum('ij,ik->jk',mps1[0],mps2[0].conjugate())
+    work1 = deepcopy(mps1[1:])
+    work2 = [v.conjugate() for v in deepcopy(mps2[1:])]
+
+    while(len(work1)>0 or len(work2)>0):
+
+        if(len(work1) == len(work2)):
+            assert len(extra.shape) == 2
+            if(len(work2[0].shape) == 3):
+                extra = np.einsum('ij,kjl->ikl',extra,work2[0])
+            else:
+                extra = np.einsum('ij,kj->ik',extra,work2[0])
+            work2 = work2[1:]
+        else:
+            assert (len(work1) - len(work2)) == 1
+            if(len(work1[0].shape) == 3):
+                assert len(extra.shape) == 3
+                extra = np.einsum('ikl,kij->jl',extra,work1[0])
+            else:
+                assert len(extra.shape) == 2
+                extra = np.einsum('ik,ki->',extra,work1[0])
+            work1 = work1[1:]
+
+    return extra 
+
+def right_mps_contract(mps1,mps2):
+    extra = np.einsum('ij,ik->jk',mps1[-1],mps2[-1].conjugate())
+    work1 = deepcopy(mps1[:-1])
+    work2 = [v.conjugate() for v in deepcopy(mps2[:-1])]
+    
+    while(len(work1)>0 or len(work2)>0):
+
+        if(len(work1) == len(work2)):
+            assert len(extra.shape) == 2
+            if(len(work2[-1].shape) == 3):
+                extra = np.einsum('ij,klj->ikl',extra,work2[-1])
+            else:
+                extra = np.einsum('ij,kj->ik',extra,work2[-1])
+            work2 = work2[:-1]
+        else:
+            assert (len(work1) - len(work2)) == 1
+            if(len(work1[-1].shape) == 3):
+                assert len(extra.shape) == 3
+                extra = np.einsum('ikl,kji->jl',extra,work1[-1])
+            else:
+                assert len(extra.shape) == 2
+                extra = np.einsum('ik,ki->',extra,work1[-1])
+            work1 = work1[:-1]
+
+    return extra 
+
+
+
+def get_double_fidelity_op(mps1,mps2,index):
+    
+    if(index == 0):
+        return get_left_double_fidelity_op(mps1,mps2)
+    elif(index == len(mps1) - 2):
+        return get_right_double_fidelity_op(mps1,mps2)
+    
+    extra1 = left_mps_contract(mps1[:index],mps2[:index])
+    extra2 = right_mps_contract(mps1[index+2:],mps2[index+2:])
+
+    
+    middle1 = mps1[index:index+2]
+    middle2 = [v.conjugate() for v in mps2[index:index+2]]
+
+        
+    out = np.einsum('ij,kjl->ikl',extra1,middle2[0])
+    out = np.einsum('ikl,mip->klmp',out,middle1[0])
+    out = np.einsum('klmp,ulv->kmpuv',out,middle2[1])
+    out = np.einsum('kmpuv,jpl->kuvlmj',out,middle1[1])
+    out = np.einsum('kuvlmj,lv->mjku',out,extra2)
+    
+    return out.reshape(4,4)
+
+def get_left_double_fidelity_op(mps1,mps2):
+    extra2 = right_mps_contract(mps1[2:],mps2[2:])
+
+    
+    middle1 = mps1[0:2]
+    middle2 = [v.conjugate() for v in mps2[0:2]]
+    
+    out = np.einsum('ij,kjl->ikl',middle1[0],middle1[1])
+    out = np.einsum('ikl,lv->ikv',out,extra2)
+    out = np.einsum('ikv,umv->ikmu',out,middle2[1])
+    out = np.einsum('ikmu,jm->ikju',out,middle2[0])
+    
+    return out.reshape(4,4)
+
+def get_right_double_fidelity_op(mps1,mps2):
+        
+    extra1 = left_mps_contract(mps1[:len(mps1)-2],mps2[:len(mps2)-2])
+
+    
+    middle1 = mps1[len(mps1)-2:len(mps1)]
+    middle2 = [v.conjugate() for v in mps2[len(mps2)-2:len(mps2)]]
+    
+    out = np.einsum('ij,kil->klj',extra1,middle1[0])
+    out = np.einsum('klj,ml->kmj',out,middle1[1])
+    out = np.einsum('kmj,pjl->kmpl',out,middle2[0])
+    out = np.einsum('kmpl,nl->kmpn',out,middle2[1])
+    
+    
+    return out.reshape(4,4)
+
+def get_single_fidelity_op(mps1,mps2):
+    extra1 = right_mps_contract(mps1[1:],mps2[1:])
+    
+    out = np.einsum('ij,ki->kj',extra1,mps1[0])
+    out = np.einsum('kj,mj->km',out,mps2[0].conjugate())
+    
+
+    return out
+
+
+"""
+Given two states mps2 and mps1 and a list of gates (real) U_1,U_2,...,U_n
+Compute the gradient of 
+<mps2|U_n...U_i...U_2U_1|mps1>
+With respect to the real components of U_i
+"""
+def gate_inner_gradient(gates,indices,mps1,mps2,gate_idx):
+    gates1 = gates[:gate_idx]
+    gates2 = gates[gate_idx+1:]
+    
+    idx1 = indices[:gate_idx]
+    idx2 = indices[gate_idx+1:]
+
+    new_mps1 = deepcopy(mps1)
+    new_mps2 = deepcopy(mps2)
+    
+    
+    for (idx,g) in zip(idx1,gates1):
+        if(len(g) == 4):
+            new_mps1 = apply_double_unitary(g,new_mps1,idx)
+        else:
+            new_mps1 = apply_single_unitary(g,new_mps1,0)
+            
+    for (idx,g) in zip(idx2[::-1],gates2[::-1]):
+        if(len(g) == 4):
+            new_mps2 = apply_double_unitary(g.T.conjugate(),new_mps2,idx)
+        else:
+            new_mps2 = apply_single_unitary(g.T.conjugate(),new_mps2,0)
+    
+    if(len(gates[gate_idx])==4):
+        eps = left_mps_contract(apply_double_unitary(gates[gate_idx],new_mps1,indices[gate_idx]),new_mps2)
+        F = get_double_fidelity_op(new_mps2,new_mps1,indices[gate_idx]).conjugate()
+        G = 1j * F
+    else:
+        eps = left_mps_contract(apply_single_unitary(gates[gate_idx],new_mps1,0),new_mps2)
+        F = get_single_fidelity_op(new_mps2,new_mps1).conjugate()
+
+    return F,eps
+
+"""
+Given two states mps2 and mps1 and a list of gates (real) U_1,U_2,...,U_n
+Compute the gradient of 
+1-|<mps2|U_n...U_i...U_2U_1|mps1>|^2
+With respect to the real components of U_i
+"""
+def gate_infidelity_gradient(gates,indices,mps1,mps2,gate_idx):
+    F,eps = gate_inner_gradient(gates,indices,mps1,mps2,gate_idx)
+    F_full  = -2 * F * eps
+    return F_full, eps
+
+
+"""
+Compute the retraction of a matrix A
+"""
+def retract(A):
+    U,_,V = np.linalg.svd(A)
+    return U @ V 
+
+"""
+Compute the projection of a tangent v given a unitary G
+"""
+def project(v,G):
+    return v - 1/2 * G @ (v.conjugate().T @ G + G.conjugate().T @ v)
+
+"""
+Project onto G after moving along v
+"""
+def transport(G,v,w):
+    return project(w,retract(G+v))
+
+
+"""
+Riemannian Gradient Descent  
+"""
+def gradient_descent(initial,target,gates,indices,alpha,reps):
+    new_gates=deepcopy(gates)
+    infid_hist = []
+    for i in tqdm(range(reps)):
+        for gate_idx in range(len(gates)):
+            F_full, eps = gate_infidelity_gradient(new_gates,indices,initial,target,gate_idx)
+            U = new_gates[gate_idx]
+            
+            v = F_full
+            proj_v = project(v,U)
+            
+            new_gates[gate_idx] = retract(U - alpha * proj_v)
+            
+        infid_hist.append(1-abs(eps)**2)
+            
+    return new_gates,infid_hist 
+
+"""
+# """
+def ADAM_decent(initial,target,gates,indices,alpha,reps,beta1=0.9,beta2=0.999):
+    transp_last  = [np.zeros(g.shape) for g in gates]
+    v_last = [0 for g in gates]
+    
+    infid_hist = []
+    new_gates=deepcopy(gates)
+    
+    for i in tqdm(range(reps)):
+        for gate_idx in range(len(gates)):
+            F_full, eps = gate_infidelity_gradient(new_gates,indices,initial,target,gate_idx)
+            U = new_gates[gate_idx]
+            
+            vec = F_full
+            proj_v = project(vec,U)
+            
+            m = beta1 * project(transp_last[gate_idx],U)+ (1-beta1) * proj_v
+            v = beta2 * v_last[gate_idx] + (1-beta2) * np.trace(proj_v.conjugate().T @ proj_v)
+            
+            step = -alpha * (m)/(np.sqrt(v)+1e-8)
+            
+            new_gates[gate_idx] = retract(U + step)
+            
+            transp_last[gate_idx] = project(m,new_gates[gate_idx]) 
+            v_last[gate_idx] = np.max([v,v_last[gate_idx]]) 
+    
+        infid_hist.append(1-abs(eps)**2)
+        
+    return new_gates,infid_hist 
+
+"""
+Layers <-> gate/index pairs 
+"""
+def layers_convert(L_list):
+    gates = []
+    indices = []
+    for L in L_list:
+        for (n,g) in enumerate(L):
+            if(len(g) == 2):
+                gates.append(g)
+                indices.append(0)
+            else: 
+                gates.append(g)
+                indices.append(len(L)-n-2)
+    return gates,indices
+
+def gates_convert(gates,indices,n):
+    return [gates[i:i + n] for i in range(0, len(gates), n)]
+                
+
+
+def optimize_layers(k,mps,reps,alpha=1e-3,beta1=0.9,beta2=0.999):
+
+    grad_layers = []
+    grad_opts = []
+    layer_hist = []
+    n = len(mps)
+    psi_init = [np.array([[1,0],[0,0]])] + [np.array([[[1,0],[0,0]],[[0,0],[0,0]]])] * (n-2) + [np.array([[1,0],[0,0]])]
+
+    for i in range(k):
+        if(i==0):
+            new_layer = get_layer(trunc_mps(mps,2))
+            grad_layers.append(new_layer)
+            
+            gates,indices = layers_convert(grad_layers[::-1])
+            
+            new_gates,eps = ADAM_decent(psi_init,mps,gates,indices,alpha,reps,beta1=beta1,beta2=beta2)
+            
+            new_L = gates_convert(new_gates,indices,n)
+            
+            grad_layers = new_L[::-1]
+            layer_hist.append(deepcopy(grad_layers[::-1]))
+            grad_opts.append(eps)
+        else:
+            current_mps = deepcopy(mps)
+            for i in grad_layers:
+                current_mps = disentangle_layer__(current_mps,i)
+            
+            new_layer = get_layer(trunc_mps(current_mps,2))
+            grad_layers.append(new_layer)
+
+            gates,indices = layers_convert(grad_layers[::-1])
+
+            new_gates,eps = ADAM_decent(psi_init,mps,gates,indices,alpha,reps,beta1=beta1,beta2=beta2)
+            
+            new_L = gates_convert(new_gates,indices,n)
+            
+            grad_layers = new_L[::-1]
+            layer_hist.append(deepcopy(grad_layers[::-1]))
+            grad_opts.append(eps)
+            
+    grad_layers = grad_layers[::-1]
+
+    return grad_layers, layer_hist, grad_opts
+
+
+
+# from scipy.linalg import fractional_matrix_power
+# def layer_update(mps1,mps2,L,r):
+#     new_L = deepcopy(L)
+#     n = len(mps1)
+    
+#     for gate_idx in range(0,n):
+#         gates1 = new_L[:gate_idx]
+#         gates2 = new_L[gate_idx+1:]
+                
+#         new_mps1 = deepcopy(mps1)
+#         new_mps2 = deepcopy(mps2)
+
+
+#         for (idx,g) in enumerate(gates1):
+#             if(len(g) == 4):
+#                 new_mps1 = apply_double_unitary(g,new_mps1, n - 2 -idx)
+#             else:
+#                 new_mps1 = apply_single_unitary(g,new_mps1,0)
+            
+#         for (idx, g) in enumerate(gates2[::-1]):
+#             if(len(g) == 4):
+#                 new_mps2 = apply_double_unitary(g.T.conjugate(),new_mps2,idx-1)
+#             else:
+#                 new_mps2 = apply_single_unitary(g.T.conjugate(),new_mps2,0)
+        
+#         if(gate_idx == n-1):
+#             F = get_single_fidelity_op(new_mps2,new_mps1).conjugate()
+#         else:
+#             F = get_double_fidelity_op(new_mps2,new_mps1,n-2-gate_idx).conjugate()
+#         U,_,V = np.linalg.svd(F)
+#         M = (U @ V)
+        
+        
+#         new_L[gate_idx] = new_L[gate_idx] @ fractional_matrix_power(new_L[gate_idx].conjugate().T @ M, r)
+        
+#     return new_L
+    
+# def layer_grad_optimize(initial,target,initial_L, r=1e-2, iters=500):
+#     new_L = deepcopy(initial_L)
+    
+#     data = [abs(left_mps_contract(target,(entangle_layer__(initial,new_L))))**2]
+#     L_list = [deepcopy(new_L)]
+    
+#     for i in range(iters):
+#         new_L = layer_update(initial,target,new_L ,r)
+#         data.append(abs(left_mps_contract(target,(entangle_layer__(initial,new_L))))**2)
+#         L_list.append(deepcopy(new_L))
+        
+#     return np.max(data),L_list[np.argmax(data)], (data,L_list)
+
+# # def multi_layer_grad_optimize(target,L_list, r=1e-2, iters=10):
+#     initial = [np.array([[1,0],[0,0]])] + [np.array([[[1,0],[0,0]],[[0,0],[0,0]]])] * (len(target)-2) + [np.array([[1,0],[0,0]])]
+    
+#     new_L_List = deepcopy(L_list)
+#     hist = []
+#     hists_full = []
+#     for _ in range(iters):
+#         for (idx,Lo) in enumerate(new_L_List):
+            
+#             pre_layers = new_L_List[:idx]
+#             post_layers = new_L_List[idx+1:]
+            
+#             current_initial = deepcopy(initial)
+#             for L in pre_layers:
+#                 current_initial = entangle_layer__(current_initial,L)
+            
+#             current_target = deepcopy(target)
+#             for L in post_layers[::-1]:
+#                 current_target = disentangle_layer__(current_target,L)
+            
+#             v,L,h = layer_grad_optimize(current_initial,current_target,Lo, r=r, iters=200)
+#             new_L_List[idx] = L
+#             hist.append(v)
+#             hists_full.append(h)
+#             #print(h[0][0],h[0][-1])
+#         print(_)
+#     return new_L_List,hist,hists_full
+        
+        
+        

@@ -1,6 +1,6 @@
 from qiskit import QuantumCircuit
-from qiskit.quantum_info import Operator
-from qiskit.circuit.library import MCXGate
+#from qiskit.quantum_info import Operator
+#from qiskit.circuit.library import MCXGate
 import numpy as np
 
 def QFT_circuit(n):
@@ -36,12 +36,12 @@ def P_circ(n):
         qc.cx(0,i)
         
     for i in range(1,n)[::-1]:
-        qc.append(MCXGate(num_ctrl_qubits=i),[0]+list(range(n-i,n))[::-1])
+        qc = qc.compose(mcx_decomp(i+1),[0]+list(range(n-i,n))[::-1])
 
     qc.h(0)
     qc.x(range(1,n))
     qc.ry(np.pi/4,0)
-    qc.append(MCXGate(num_ctrl_qubits=n-1),list(range(1,n))+[0])
+    qc = qc.compose(mcx_decomp(n),list(range(1,n))+[0])
     qc.ry(-np.pi/4,0)
     qc.x(range(1,n))
     return qc
@@ -57,29 +57,29 @@ def Q_circ(n):
 ###C.T
 def PFQ_circ(n):
     qc = QuantumCircuit(n+1)
-    qc.append(Q_circ(n+1),range(n+1))
-    qc.append(IQFT_circuit(n+1),range(n+1))
-    qc.append(P_circ(n+1),range(n+1))
+    qc = qc.compose(Q_circ(n+1),range(n+1))
+    qc = qc.compose(IQFT_circuit(n+1),range(n+1))
+    qc = qc.compose(P_circ(n+1),range(n+1))
     return qc
 
 ###C
 def IPFQ_circ(n):
     qc = QuantumCircuit(n+1)
-    qc.append(P_circ(n+1).inverse(),range(n+1))
-    qc.append(QFT_circuit(n+1),range(n+1))
-    qc.append(Q_circ(n+1).inverse(),range(n+1))
+    qc = qc.compose(P_circ(n+1).inverse(),range(n+1))
+    qc = qc.compose(QFT_circuit(n+1),range(n+1))
+    qc = qc.compose(Q_circ(n+1).inverse(),range(n+1))
     return qc
 
 def evolve_circ(n,t):
     qc = QuantumCircuit(n+2)
-    qc.append(PFQ_circ(n),[0] + list(range(2,n+2)))
+    qc = qc.compose(PFQ_circ(n),[0] + list(range(2,n+2)))
     qc.h(1)
     for i in range(0,n):
         qc.p(-np.pi*t*(2**(n-i-1)),i+2)
     for i in range(0,n):
         qc.cp(np.pi*t*(2**(n-i)),1,i+2)
     qc.h(1)
-    qc.append(IPFQ_circ(n),[0] + list(range(2,n+2)))
+    qc = qc.compose(IPFQ_circ(n),[0] + list(range(2,n+2)))
     return qc
 ############################### Matrix Methods ##################################
 
@@ -160,3 +160,39 @@ def L_N(n):
     out[n-1,n-1] = -1
     out[n-1,n-2] = 1
     return out
+
+def triag_circ(n):
+    qc = QuantumCircuit(n)
+    for i in range(1,n):
+        for j in range(i):
+            if(-i+j != -1):
+                qc.crx(np.pi/2**(j+1-int(i+1 == n)),n-i-1,n-i+j)
+            else:
+                qc.cp(np.pi/2**(j+1-int(i+1 == n)),n-i-1,n-i+j)
+    for i in range(1,n-1)[::-1]:
+        for j in range(i):
+            if(-i+j != -1):
+                qc.crx(-np.pi/2**(j+1),n-i-1,n-i+j)
+            else:
+                qc.cp(-np.pi/2**(j+1),n-i-1,n-i+j)
+
+    return qc
+
+def minus_triag_circ(n):
+    qc = QuantumCircuit(n)
+    for i in range(1,n):
+        for j in range(i):
+            qc.crx(np.pi/2**(j+1-int(i+1 == n)) * (-1)**int(i+1 == n),n-i-1,n-i+j)
+    for i in range(1,n-1)[::-1]:
+        for j in range(i):
+            qc.crx(-np.pi/2**(j+1),n-i-1,n-i+j)
+    return qc
+
+
+def mcx_decomp(n):
+    qc = QuantumCircuit(n)
+    qc.h(-1)
+    qc = qc.compose(triag_circ(n),range(n))
+    qc = qc.compose(minus_triag_circ(n-1),range(n-1))
+    qc.h(-1)
+    return qc
