@@ -196,3 +196,161 @@ def mcx_decomp(n):
     qc = qc.compose(minus_triag_circ(n-1),range(n-1))
     qc.h(-1)
     return qc
+
+
+#### Periodic Circuit###
+def SQFT_circuit(n):
+    qc = QuantumCircuit(n)
+    qc.x(0)
+    for i in range(n):
+        qc.h(i)
+        for j in range(i+1,n):
+            qc.cp(np.pi/(2**(j-i)),j,i)
+    for i in range(n//2):
+        qc.swap(i,n-i-1)
+    qc.x(0)
+    return qc
+
+def SIQFT_circuit(n):
+    qc = QuantumCircuit(n)
+    qc.x(0)
+    for i in range(n):
+        qc.h(i)
+        for j in range(i+1,n):
+            qc.cp(-np.pi/(2**(j-i)),j,i)
+    for i in range(n//2):
+        qc.swap(i,n-i-1)
+    qc.x(0)
+    return qc
+
+def SQFT_matrix(n):
+    l = range(-n//2,n//2)
+    Q = np.zeros((n,n),dtype=complex)
+    omega =  np.exp(1j * 2 * np.pi/n)
+    for i in range(n):
+        for j in range(n):
+            Q[i,j] = omega**(l[i]*l[j])/np.sqrt(n)
+    return Q
+
+def SIQFT_matrix(n):
+    l = range(-n//2,n//2)
+    Q = np.zeros((n,n),dtype=complex)
+    omega =  np.exp(-1j * 2 * np.pi/n)
+    for i in range(n):
+        for j in range(n):
+            Q[i,j] = omega**(l[i]*l[j])/np.sqrt(n)
+    return Q
+
+def L_P(n):
+    out = np.zeros((n,n))
+    for i in range(0,n):
+        out[i,(i-1)%n ] = 1
+        out[i,i ] = -2
+        out[i,(i+1)%n ] = 1
+    return out
+
+def spectrum_P(n):
+    return -4*np.cos(np.linspace(0,n-1,n)*np.pi/(n))**2
+
+def linear_spectrum_P(n):
+    return 2*(np.linspace(0,n-1,n)*np.pi/(n)) - np.pi
+
+def linear_Ham_P(n,L=1):
+    out = np.kron(H, SQFT_matrix(n))  @ np.kron(Z, np.diag(n/L * linear_spectrum_P(n))) @ np.kron(H, SIQFT_matrix(n).T)
+    return out
+
+
+def Ham_P(n,L=1):
+    out = np.kron(H, SQFT_matrix(n))  @ np.kron(Z, np.diag(n/L * np.sqrt(-spectrum_P(n)))) @ np.kron(H, SIQFT_matrix(n).T)
+    return out
+
+def evolve_circ_P(n,t):
+    qc = QuantumCircuit(n+1)
+    qc.h(0)
+    qc = qc.compose(SIQFT_circuit(n),range(1,n+1))
+    for i in range(-1,n):
+        qc.p(-np.pi*t*(2**(n-i)),i+1)
+    for i in range(0,n):
+        qc.cp(np.pi*t*(2**(n-i+1)),0,i+1)
+    qc.h(0)
+    qc = qc.compose(SQFT_circuit(n),range(1,n+1))
+    return qc
+
+
+#### Periodic Methods
+def SQFT_circuit(n):
+    qc = QuantumCircuit(n)
+    qc.x(0)
+    for i in range(n):
+        qc.h(i)
+        for j in range(i+1,n):
+            qc.cp(np.pi/(2**(j-i)),j,i)
+    for i in range(n//2):
+        qc.swap(i,n-i-1)
+    qc.x(0)
+    return qc
+
+def SIQFT_circuit(n):
+    qc = QuantumCircuit(n)
+    qc.x(0)
+    for i in range(n):
+        qc.h(i)
+        for j in range(i+1,n):
+            qc.cp(-np.pi/(2**(j-i)),j,i)
+    for i in range(n//2):
+        qc.swap(i,n-i-1)
+    qc.x(0)
+    return qc
+
+def SQFT_matrix(n):
+    l = range(-n//2,n//2)
+    Q = np.zeros((n,n),dtype=complex)
+    omega =  np.exp(1j * 2 * np.pi/n)
+    for i in range(n):
+        for j in range(n):
+            Q[i,j] = omega**(l[i]*l[j])/np.sqrt(n)
+    return Q
+
+def SIQFT_matrix(n):
+    l = range(-n//2,n//2)
+    Q = np.zeros((n,n),dtype=complex)
+    omega =  np.exp(-1j * 2 * np.pi/n)
+    for i in range(n):
+        for j in range(n):
+            Q[i,j] = omega**(l[i]*l[j])/np.sqrt(n)
+    return Q
+
+def L_P(n):
+    out = np.zeros((n,n))
+    for i in range(0,n):
+        out[i,(i-1)%n ] = 1
+        out[i,i ] = -2
+        out[i,(i+1)%n ] = 1
+    return out
+
+def spectrum_P(n):
+    return -4*np.cos(np.linspace(0,n-1,n)*np.pi/(n))**2
+
+def linear_spectrum_P(n):
+    return 2*(np.linspace(0,n-1,n)*np.pi/(n)) - np.pi
+
+def linear_Ham_P(n,L=1):
+    out = np.kron(H, SQFT_matrix(n))  @ np.kron(Z, np.diag(n/L * linear_spectrum_P(n))) @ np.kron(H, SIQFT_matrix(n).T)
+    return out
+
+
+def Ham_P(n,L=1):
+    out = np.kron(H, SQFT_matrix(n))  @ np.kron(Z, np.sign(linear_spectrum_P(n))*np.diag(n/L * np.sqrt(-spectrum_P(n)))) @ np.kron(H, SIQFT_matrix(n).T)
+    return out
+
+def evolve_circ_P(n,t):
+    qc = QuantumCircuit(n+1)
+    qc.h(0)
+    qc = qc.compose(SIQFT_circuit(n),range(1,n+1))
+    for i in range(-1,n):
+        qc.p(-np.pi*t*(2**(n-i)),i+1)
+    for i in range(0,n):
+        qc.cp(np.pi*t*(2**(n-i+1)),0,i+1)
+    qc.h(0)
+    qc = qc.compose(SQFT_circuit(n),range(1,n+1))
+    return qc

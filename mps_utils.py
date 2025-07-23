@@ -117,8 +117,6 @@ def left_cannonical_mps(M):
 
     return cannon 
 
-
-
 def trunc_mps(M,order):
     cannon = deepcopy(M)
     
