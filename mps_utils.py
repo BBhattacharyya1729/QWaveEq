@@ -1,4 +1,5 @@
 from scipy.special import comb
+from scipy.linalg import fractional_matrix_power as mpow
 import numpy as np 
 from functools import reduce 
 from copy import deepcopy
@@ -6,6 +7,8 @@ from tqdm.notebook import tqdm
 import pymanopt
 from pymanopt.manifolds import Product, Stiefel
 
+
+### Get the matrix product state on n sites for a polynomial with coefficients in the list a. reg is a list of 0's and 1's indicating what region of the interval is being used.### 
 def MPS_poly(n,a, reg):
     p = len(a)-1
     t = ([1/2**i for i in range(1,n+1)])
@@ -36,11 +39,13 @@ def MPS_poly(n,a, reg):
     
     return M
 
+### Direct sum of two matrices ###
 def __block__(a,b):
     am,an = a.shape     
     bm,bn = b.shape
     return np.block( [[a, np.zeros((am,bn))], [np.zeros((bm,an)), b]])
 
+### Sum of two MPS (corresponds to direct sum of components)###
 def MPS_sum(M1,M2):
     M3 =  [np.concatenate([M1[0],M2[0]],axis=1)]
     for i in range(1,len(M1)-1):
@@ -51,6 +56,7 @@ def MPS_sum(M1,M2):
     M3.append(np.concatenate([M1[-1],M2[-1]],axis=1))
     return M3
 
+### Cubic interpolation ##
 def quad(x0,x1,f0,f1,df0,df1):
     A=np.array([[x0**3,x0**2,x0**1,1],
                 [3*x0**2,2*x0,1,0],
@@ -59,6 +65,7 @@ def quad(x0,x1,f0,f1,df0,df1):
     b = np.linalg.inv(A) @ np.array([f0,df0,f1,df1])
     return b[::-1]
 
+### From a sequence of points, the function, and its derivative, get the relevant cubic polynomials between them ###
 def get_polys(x,f,df):
     
     polys = [ ]
@@ -67,10 +74,11 @@ def get_polys(x,f,df):
     
     return polys
 
+### Apply a polynomial ###
 def apply(p,x):
     return np.dot(p,[x**i for i in range(len(p))])
 
-
+### Convert a Matrix product state to right cannonical form###
 def right_cannonical_mps(M):
     cannon = deepcopy(M)
     n  = len(M)
@@ -96,7 +104,7 @@ def right_cannonical_mps(M):
     
     return cannon 
 
-
+### Convert a matrix product state to left cannonical form ###
 def left_cannonical_mps(M):
     cannon = deepcopy(M)
     n = len(M)
@@ -122,6 +130,7 @@ def left_cannonical_mps(M):
 
     return cannon 
 
+### Truncate a matrix product state to a given order ###
 def trunc_mps(M,order):
     cannon = deepcopy(M)
     
@@ -155,6 +164,7 @@ def trunc_mps(M,order):
     
     return cannon 
 
+### Do the full contraction over MPS to get statevector. Notice that physical statevector indices are always first index in mps tensor###
 def get_state(M):
     state = []
     n = len(M)
@@ -166,6 +176,7 @@ def get_state(M):
         state.append(reduce(lambda a,b:a@b, M_b))
     return np.array(state)
 
+### Get layer from an EXACTLY bond order 2 left cannonical MPS ###
 def get_layer(bond2):
     L = [bond2[0]]
     for i in range(1,len(bond2)-1):
@@ -174,6 +185,7 @@ def get_layer(bond2):
     L.append(np.hstack([np.reshape(bond2[-1].T,(4,1)),np.linalg.svd(np.reshape(bond2[-1].T,(4,1)))[0][:,1:]]))
     return L[::-1]
 
+### Get next layer from current sequence of layers ###
 def get_next_layer(layers, target):
     disentangled_mps = deepcopy(target)
     for l in layers[::-1]:
@@ -184,6 +196,7 @@ def get_next_layer(layers, target):
 def zero_mps(n):
     return [np.array([[1,0],[0,0]])] + [np.array([[[1,0],[0,0]],[[0,0],[0,0]]])] * (n-2) + [np.array([[1,0],[0,0]])]
 
+### Apply a single qubit unitary to a given mps site ###
 def apply_single_unitary(U,mps,index):
     out = deepcopy(mps)
     if(index == 0):
@@ -194,6 +207,7 @@ def apply_single_unitary(U,mps,index):
         out[index] = np.einsum('ji,imk->jmk',U,out[index]) 
     return (out) 
 
+### Apply a double unitary to a site (the indices are site and site+1).  Use SVD to decompose the new physical index pair. Notice that this increases bond dimension###
 def apply_double_unitary(U,mps,index):
     out = deepcopy(mps)
     if(index == 0):
@@ -242,7 +256,7 @@ def apply_double_unitary(U,mps,index):
 
     return out 
 
-
+### Contract two MPS's starting from the left and working towards the right ###
 def left_mps_contract(mps1,mps2):
     extra = np.einsum('ij,ik->jk',mps1[0],mps2[0].conjugate())
     work1 = deepcopy(mps1[1:])
@@ -269,6 +283,7 @@ def left_mps_contract(mps1,mps2):
 
     return extra 
 
+### Contract two MPS's starting from the right and working towards the left ###
 def right_mps_contract(mps1,mps2):
     extra = np.einsum('ij,ik->jk',mps1[-1],mps2[-1].conjugate())
     work1 = deepcopy(mps1[:-1])
@@ -295,6 +310,7 @@ def right_mps_contract(mps1,mps2):
 
     return extra 
 
+
 def entangle_layer(init_state, layer):
     n = len(init_state)
     out = deepcopy(init_state)
@@ -305,9 +321,9 @@ def entangle_layer(init_state, layer):
 
 def disentangle_layer(init_state, layer):
     out = deepcopy(init_state)
-    out = apply_single_unitary(layer[-1].T, out, 0)
+    out = apply_single_unitary(layer[-1].T.conjugate(), out, 0)
     for i,U in enumerate(layer[:-1][::-1]):
-        out = apply_double_unitary(U.T, out, i)
+        out = apply_double_unitary(U.T.conjugate(), out, i)
     return out
 
 def get_double_fidelity_op(mps1,mps2,index):
@@ -373,86 +389,185 @@ def get_single_fidelity_op(mps1,mps2):
     return out
 
 
-def manifold_gate_opt(targ_mps,init_gates):
-    n = len(targ_mps)
-    psi_init = zero_mps(n)
-    num_layers = len(init_gates)//n 
-
-    idx_list = (list(range(0,n-1))[::-1] + [0]) * num_layers
-    shapes = ([(4,4)] * (n-1) + [(2,2)]) * num_layers
-    
-    def overlap(gates):
-        layers = [gates[i * n:(i+1) * n] for i in range(num_layers)]
-        eval_state = deepcopy(psi_init)
-        for l in layers:
-            eval_state = entangle_layer(eval_state, l)
-        
-        return left_mps_contract(targ_mps, eval_state)
-
-    def overlap_grad(gates):
-        grads = []
-        for i in range(len(gates)):
-            left_mps = deepcopy(targ_mps)
-            right_mps = deepcopy(psi_init)
-            
-            prev_op, prev_idx = gates[:i], idx_list[:i]
-            after_op, after_idx = gates[(i+1):], idx_list[(i+1):]
-            
-            for (U, _) in zip(prev_op, prev_idx):
-                if(len(U) == 2):
-                    right_mps = apply_single_unitary(U, right_mps, _)
-                else:
-                    right_mps = apply_double_unitary(U, right_mps, _)
-                    
-            for (U, _) in zip(after_op[::-1], after_idx[::-1]):
-                if(len(U) == 2):
-                    left_mps = apply_single_unitary(U.T, left_mps, _)
-                else:
-                    left_mps = apply_double_unitary(U.T, left_mps, _)
-            
-            if(len(gates[i]) == 2):
-                grads.append(get_single_fidelity_op(left_mps, right_mps))
-            else:
-                grads.append(get_double_fidelity_op(left_mps, right_mps, idx_list[i]))
-        return grads
+# --------------------------------------------------
+# Helper: apply a gate (optionally daggered)
+# --------------------------------------------------
+def apply_gate(g, state, idx, dagger=False):
+    if dagger:
+        g = g.conjugate().T
+    if len(g) == 2:
+        return apply_single_unitary(g, state, idx)
+    else:
+        return apply_double_unitary(g, state, idx)
 
 
-    manifold = Product([Stiefel(*s) for s in shapes])
-    hist = []
-    @pymanopt.function.numpy(manifold)
-    def log_fidelity(*gates):
-        F = overlap(gates)
-        hist.append(gates)
-        return np.log(1-F**2)
+# --------------------------------------------------
+# Efficient computation of all F operators
+# --------------------------------------------------
+def compute_F_list(gates, indices, init, targ):
+    G = len(gates)
 
-    @pymanopt.function.numpy(manifold)
-    def log_fidelity_grad(*gates):
-        F = overlap(gates)
-        k = -(2 * F)/(1 - F**2)
-        G = overlap_grad(gates)
-        return [k * g for g in G]
+    # Prefix states: R[i] = U_{i-1} ... U_0 |init>
+    R = [None] * (G + 1)
+    R[0] = init
+    for i in range(G):
+        R[i + 1] = apply_gate(gates[i], R[i], indices[i])
 
-    problem = pymanopt.Problem(manifold, log_fidelity, euclidean_gradient=log_fidelity_grad)
-    optimizer = pymanopt.optimizers.ConjugateGradient(max_iterations = 5000, max_time = 10000)
-    result = optimizer.run(problem, initial_point=init_gates)
-    
-    return result, hist
+    # Suffix states: L[i] = U_{i+1}^† ... U_{G-1}^† |targ>
+    L = [None] * (G + 1)
+    L[G] = targ
+    for i in reversed(range(G)):
+        L[i] = apply_gate(gates[i], L[i + 1], indices[i], dagger=True)
 
-def optimize_mps_circuit(targ_mps, num_layers):
+    # Fidelity operators
+    F_list = []
+    for i in range(G):
+        if len(gates[i]) == 2:
+            F_list.append(get_single_fidelity_op(R[i], L[i + 1]))
+        else:
+            F_list.append(
+                get_double_fidelity_op(R[i], L[i + 1], indices[i])
+            )
+
+    return F_list
+
+
+# --------------------------------------------------
+# Gate update
+# --------------------------------------------------
+def update_gate(g, F, r):
+    U, S, Vh = np.linalg.svd(F)
+    F_op = Vh.conjugate().T @ U.conjugate().T
+
+    new_op = g @ mpow(g.conjugate().T @ F_op, r)
+
+    U, S, Vh = np.linalg.svd(new_op)
+    return U @ Vh
+
+
+# --------------------------------------------------
+# One optimization step over all gates
+# --------------------------------------------------
+def step_gates(gates, indices, init, targ, r):
+    F_list = compute_F_list(gates, indices, init, targ)
+    for i in range(len(gates)):
+        gates[i] = update_gate(gates[i], F_list[i], r)
+    return gates
+
+
+# --------------------------------------------------
+# Main optimization routine
+# --------------------------------------------------
+def optimize_mps_circuit(targ, num_layers, r=1e-3, opt_iters=1000):
     layers = []
-    full_hist = []
-    results = []
-    n = len(targ_mps)
-    for i in range(num_layers):
-        print("==========================================")
-        print("Optimization for Layer ", i+1)
-        print("==========================================")
-        layers = get_next_layer(layers, targ_mps)
-        result, hist = manifold_gate_opt(targ_mps,sum(layers, []))
-        full_hist.append(hist)
-        results.append(result)
-        layers = [result.point[i * n:(i+1) * n] for i in range(len(result.point)//n)]
-    return layers, results, full_hist
+    gates = []
+    indices = []
+
+    layers_hist = []   # history after full layer updates
+    gates_hist = []    # full gate update history
+
+    n = len(targ)
+    init = zero_mps(n)
+
+    for _ in range(num_layers):
+        # Build next layer
+        layers = get_next_layer(layers, targ)
+        gates = sum(layers, [])
+        indices += list(range(n - 1))[::-1] + [0]
+
+        # Optimize gates
+        for _ in range(opt_iters):
+            gates = step_gates(gates, indices, init, targ, r)
+            gates_hist.append(deepcopy(gates))
+
+        # Re-pack gates into layers
+        layers = [gates[i:i + n] for i in range(0, len(gates), n)]
+        layers_hist.append(deepcopy(layers))
+
+        print("----------------------------------------------")
+
+    return layers_hist, gates_hist
+
+# def manifold_gate_opt(targ_mps,init_gates):
+#     n = len(targ_mps)
+#     psi_init = zero_mps(n)
+#     num_layers = len(init_gates)//n 
+
+#     idx_list = (list(range(0,n-1))[::-1] + [0]) * num_layers
+#     shapes = ([(4,4)] * (n-1) + [(2,2)]) * num_layers
+    
+#     def overlap(gates):
+#         layers = [gates[i * n:(i+1) * n] for i in range(num_layers)]
+#         eval_state = deepcopy(psi_init)
+#         for l in layers:
+#             eval_state = entangle_layer(eval_state, l)
+        
+#         return left_mps_contract(targ_mps, eval_state)
+
+#     def overlap_grad(gates):
+#         grads = []
+#         for i in range(len(gates)):
+#             left_mps = deepcopy(targ_mps)
+#             right_mps = deepcopy(psi_init)
+            
+#             prev_op, prev_idx = gates[:i], idx_list[:i]
+#             after_op, after_idx = gates[(i+1):], idx_list[(i+1):]
+            
+#             for (U, _) in zip(prev_op, prev_idx):
+#                 if(len(U) == 2):
+#                     right_mps = apply_single_unitary(U, right_mps, _)
+#                 else:
+#                     right_mps = apply_double_unitary(U, right_mps, _)
+                    
+#             for (U, _) in zip(after_op[::-1], after_idx[::-1]):
+#                 if(len(U) == 2):
+#                     left_mps = apply_single_unitary(U.T, left_mps, _)
+#                 else:
+#                     left_mps = apply_double_unitary(U.T, left_mps, _)
+            
+#             if(len(gates[i]) == 2):
+#                 grads.append(get_single_fidelity_op(left_mps, right_mps))
+#             else:
+#                 grads.append(get_double_fidelity_op(left_mps, right_mps, idx_list[i]))
+#         return grads
+
+
+#     manifold = Product([Stiefel(*s) for s in shapes])
+#     hist = []
+#     @pymanopt.function.numpy(manifold)
+#     def log_fidelity(*gates):
+#         F = overlap(gates)
+#         hist.append(gates)
+#         return np.log(1-F**2)
+
+#     @pymanopt.function.numpy(manifold)
+#     def log_fidelity_grad(*gates):
+#         F = overlap(gates)
+#         k = -(2 * F)/(1 - F**2)
+#         G = overlap_grad(gates)
+#         return [k * g for g in G]
+
+#     problem = pymanopt.Problem(manifold, log_fidelity, euclidean_gradient=log_fidelity_grad)
+#     optimizer = pymanopt.optimizers.ConjugateGradient(max_iterations = 5000, max_time = 10000)
+#     result = optimizer.run(problem, initial_point=init_gates)
+    
+#     return result, hist
+
+# def optimize_mps_circuit(targ_mps, num_layers):
+#     layers = []
+#     full_hist = []
+#     results = []
+#     n = len(targ_mps)
+#     for i in range(num_layers):
+#         print("==========================================")
+#         print("Optimization for Layer ", i+1)
+#         print("==========================================")
+#         layers = get_next_layer(layers, targ_mps)
+#         result, hist = manifold_gate_opt(targ_mps,sum(layers, []))
+#         full_hist.append(hist)
+#         results.append(result)
+#         layers = [result.point[i * n:(i+1) * n] for i in range(len(result.point)//n)]
+#     return layers, results, full_hist
 
 
 # def entangle_layer__(mps,L):

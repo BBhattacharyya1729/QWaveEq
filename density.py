@@ -278,10 +278,14 @@ def apply_sdg_gate(rho, idx, n): apply_unitary_to_qubit_dm_inplace(rho, np.array
 def apply_x_gate(rho, idx, n): apply_unitary_to_qubit_dm_inplace(rho, X, idx, n)
 def apply_z_gate(rho, idx, n): apply_unitary_to_qubit_dm_inplace(rho, Z, idx, n)
 def apply_h_gate(rho, idx, n): apply_unitary_to_qubit_dm_inplace(rho, H, idx, n)
-def apply_rz_gate(angle, rho, idx, n): apply_unitary_to_qubit_dm_inplace(rho, np.array([[np.exp(-1j*angle/2),0],[0,np.exp(1j*angle/2)]], np.complex128), idx, n)
+def apply_rz_gate(angle, rho, idx, n): 
+    apply_unitary_to_qubit_dm_inplace(rho, np.array([[np.exp(-1j*angle/2),0],[0,np.exp(1j*angle/2)]], np.complex128), idx, n)
 def apply_ry_gate(angle, rho, idx, n):
     c,s = np.cos(angle/2), np.sin(angle/2)
     apply_unitary_to_qubit_dm_inplace(rho, np.array([[c,-s],[s,c]], np.complex128), idx, n)
+def apply_rx_gate(angle, rho, idx, n):
+    c,s = np.cos(angle/2), np.sin(angle/2)
+    apply_unitary_to_qubit_dm_inplace(rho, np.array([[c,-1j*s],[-1j*s,c]], np.complex128), idx, n)
 def apply_p_gate(angle, rho, idx, n): apply_unitary_to_qubit_dm_inplace(rho, np.array([[1,0],[0,np.exp(1j*angle)]], np.complex128), idx, n)
 
 # -----------------------
@@ -314,6 +318,9 @@ def get_density_matrix(circ, lam):
             apply_two_qubit_depolarizing_inplace(rho, lam, idx_list[0], idx_list[1], n)
         elif name=='rz':
             apply_rz_gate(params[0], rho, idx_list[0], n)
+            apply_single_qubit_depolarizing_inplace(rho, lam, idx_list[0], n)
+        elif name=='rx':
+            apply_rx_gate(params[0], rho, idx_list[0], n)
             apply_single_qubit_depolarizing_inplace(rho, lam, idx_list[0], n)
         elif name=='ry':
             apply_ry_gate(params[0], rho, idx_list[0], n)
@@ -356,94 +363,94 @@ def get_operations(circ):
         ops.append([inst.operation.name, inst.operation.params, [_._index for _ in inst.qubits]])
     return ops
 
-def fold_circ(circ, fold_prob):
-    """
-    Stochastically "fold" a circuit by inserting gate-inverse pairs.
+# def fold_circ(circ, fold_prob):
+#     """
+#     Stochastically "fold" a circuit by inserting gate-inverse pairs.
 
-    Args:
-        circ (QuantumCircuit): Input circuit.
-        fold_prob (float): Probability of folding each gate.
+#     Args:
+#         circ (QuantumCircuit): Input circuit.
+#         fold_prob (float): Probability of folding each gate.
 
-    Returns:
-        QuantumCircuit: New circuit with random folds applied.
+#     Returns:
+#         QuantumCircuit: New circuit with random folds applied.
 
-    Notes:
-        This is used for error mitigation via "probabilistic folding."
-    """
-    ops = get_operations(circ)
-    new_circ = QuantumCircuit(circ.num_qubits)
-    for name, params, idx_list in ops:
-        if name == 's':
-            new_circ.s(idx_list[0])
-            if(np.random.random() < fold_prob):
-                new_circ.sdg(idx_list[0])
-                new_circ.s(idx_list[0])
-        elif name == 'h':
-            new_circ.h(idx_list[0])
+#     Notes:
+#         This is used for error mitigation via "probabilistic folding."
+#     """
+#     ops = get_operations(circ)
+#     new_circ = QuantumCircuit(circ.num_qubits)
+#     for name, params, idx_list in ops:
+#         if name == 's':
+#             new_circ.s(idx_list[0])
+#             if(np.random.random() < fold_prob):
+#                 new_circ.sdg(idx_list[0])
+#                 new_circ.s(idx_list[0])
+#         elif name == 'h':
+#             new_circ.h(idx_list[0])
             
-            if(np.random.random() < fold_prob):
-                new_circ.h(idx_list[0])
-                new_circ.h(idx_list[0])
-        elif name == 'cx':
-            new_circ.cx(idx_list[0], idx_list[1])
-            if(np.random.random() < fold_prob):
-                new_circ.cx(idx_list[0], idx_list[1])
-                new_circ.cx(idx_list[0], idx_list[1])
-        elif name == 'rz':
-            new_circ.rz(params[0], idx_list[0]) 
-            if(np.random.random() < fold_prob):     
-                new_circ.rz(-params[0], idx_list[0]) 
-                new_circ.rz(params[0], idx_list[0])   
-        elif name == 'ry':
-            new_circ.ry(params[0], idx_list[0])
-            if(np.random.random() < fold_prob): 
-                new_circ.ry(-params[0], idx_list[0]) 
-                new_circ.ry(params[0], idx_list[0]) 
-        elif name == 'sdg':
-            new_circ.sdg(idx_list[0])
-            if(np.random.random() < fold_prob): 
-                new_circ.s(idx_list[0])
-                new_circ.sdg(idx_list[0])
-        elif name == 'z':
-            new_circ.z(idx_list[0])
-            if(np.random.random() < fold_prob): 
-                new_circ.z(idx_list[0])
-                new_circ.z(idx_list[0])
-        elif name == 'x':
-            new_circ.x(idx_list[0])
-            if(np.random.random() < fold_prob): 
-                new_circ.x(idx_list[0])
-                new_circ.x(idx_list[0])
-        elif name == 'cp':
-            new_circ.cp(params[0], idx_list[0], idx_list[1])        
-            if(np.random.random() < fold_prob):
-                new_circ.cp(-params[0], idx_list[0], idx_list[1])    
-                new_circ.cp(params[0], idx_list[0], idx_list[1])    
-        elif name == 'p':
-            new_circ.p(params[0], idx_list[0])    
-            if(np.random.random() < fold_prob):
-                new_circ.p(-params[0], idx_list[0])
-                new_circ.p(params[0], idx_list[0])
-    return new_circ
+#             if(np.random.random() < fold_prob):
+#                 new_circ.h(idx_list[0])
+#                 new_circ.h(idx_list[0])
+#         elif name == 'cx':
+#             new_circ.cx(idx_list[0], idx_list[1])
+#             if(np.random.random() < fold_prob):
+#                 new_circ.cx(idx_list[0], idx_list[1])
+#                 new_circ.cx(idx_list[0], idx_list[1])
+#         elif name == 'rz':
+#             new_circ.rz(params[0], idx_list[0]) 
+#             if(np.random.random() < fold_prob):     
+#                 new_circ.rz(-params[0], idx_list[0]) 
+#                 new_circ.rz(params[0], idx_list[0])   
+#         elif name == 'ry':
+#             new_circ.ry(params[0], idx_list[0])
+#             if(np.random.random() < fold_prob): 
+#                 new_circ.ry(-params[0], idx_list[0]) 
+#                 new_circ.ry(params[0], idx_list[0]) 
+#         elif name == 'sdg':
+#             new_circ.sdg(idx_list[0])
+#             if(np.random.random() < fold_prob): 
+#                 new_circ.s(idx_list[0])
+#                 new_circ.sdg(idx_list[0])
+#         elif name == 'z':
+#             new_circ.z(idx_list[0])
+#             if(np.random.random() < fold_prob): 
+#                 new_circ.z(idx_list[0])
+#                 new_circ.z(idx_list[0])
+#         elif name == 'x':
+#             new_circ.x(idx_list[0])
+#             if(np.random.random() < fold_prob): 
+#                 new_circ.x(idx_list[0])
+#                 new_circ.x(idx_list[0])
+#         elif name == 'cp':
+#             new_circ.cp(params[0], idx_list[0], idx_list[1])        
+#             if(np.random.random() < fold_prob):
+#                 new_circ.cp(-params[0], idx_list[0], idx_list[1])    
+#                 new_circ.cp(params[0], idx_list[0], idx_list[1])    
+#         elif name == 'p':
+#             new_circ.p(params[0], idx_list[0])    
+#             if(np.random.random() < fold_prob):
+#                 new_circ.p(-params[0], idx_list[0])
+#                 new_circ.p(params[0], idx_list[0])
+#     return new_circ
 
 
-#### ZNE ####
-def exponential_fit(x_data, y_data, N):
-    """
-    Extrapolate data with an exponential fit given the behavior at infinity
+# #### ZNE ####
+# def exponential_fit(x_data, y_data, N):
+#     """
+#     Extrapolate data with an exponential fit given the behavior at infinity
 
-    Args:
-        x_data (list[Float]): x data.
-        y_data (list[Float]): y data.
-        N (float or Int): x-> infinity limit
+#     Args:
+#         x_data (list[Float]): x data.
+#         y_data (list[Float]): y data.
+#         N (float or Int): x-> infinity limit
 
-    Returns:
-        Fitted exponential fit function
+#     Returns:
+#         Fitted exponential fit function
 
-    """
-    transformed_y_data = np.log(N - np.array(y_data))
-    A = np.vstack([np.ones(len(x_data)), x_data]).T
+#     """
+#     transformed_y_data = np.log(N - np.array(y_data))
+#     A = np.vstack([np.ones(len(x_data)), x_data]).T
 
-    c1,c2 =np.linalg.inv(A.T @ A) @ A.T @ transformed_y_data
+#     c1,c2 =np.linalg.inv(A.T @ A) @ A.T @ transformed_y_data
     
-    return lambda x : N - np.exp(c1 + c2 * x)
+#     return lambda x : N - np.exp(c1 + c2 * x)
